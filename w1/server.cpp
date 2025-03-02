@@ -66,9 +66,9 @@ int main(int argc, const char **argv)
         printf("(%s:%d) %s\n", inet_ntoa(sin.sin_addr), sin.sin_port, buffer); // assume that buffer is a string
 
         if (!strncmp(buffer, initialKeyword.c_str(), initialKeyword.length())) {
-          const char *response = "Welcome!";
+          std::string response = "Welcome, " + std::to_string(sin.sin_port) + "!";
           printf("welcoming\n");
-          ssize_t sentBytes = sendto(sfd, response, strlen(response), 0, (sockaddr*)&sin, slen);
+          ssize_t sentBytes = sendto(sfd, response.c_str(), response.length(), 0, (sockaddr*)&sin, slen);
 
           if (sentBytes == -1) {
             perror("Error sending response");
