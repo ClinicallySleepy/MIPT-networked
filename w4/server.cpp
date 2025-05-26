@@ -1,3 +1,7 @@
+#include <cmath>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <enet/enet.h>
 #include <iostream>
 #include "entity.h"
@@ -5,9 +9,11 @@
 #include <stdlib.h>
 #include <vector>
 #include <map>
+#include <math.h>
 
 static std::vector<Entity> entities;
 static std::map<uint16_t, ENetPeer*> controlledMap;
+static std::map<uint16_t, int> scoresMap;
 
 static uint16_t create_random_entity()
 {
@@ -18,7 +24,8 @@ static uint16_t create_random_entity()
                    0x00000044 * (1 + rand() % 4);
   float x = (rand() % 40 - 20) * 5.f;
   float y = (rand() % 40 - 20) * 5.f;
-  Entity ent = {color, x, y, newEid, false, 0.f, 0.f};
+  float radius = static_cast<float>(rand() / static_cast<float>(RAND_MAX)) * 3.0f + 11.0f;
+  Entity ent = {color, x, y, radius, newEid, false, 0.f, 0.f};
   entities.push_back(ent);
   return newEid;
 }
@@ -34,7 +41,7 @@ void on_join(ENetPacket *packet, ENetPeer *peer, ENetHost *host)
   const Entity& ent = entities[newEid];
 
   controlledMap[newEid] = peer;
-
+  scoresMap[newEid] = 0;
 
   // send info about new entity to everyone
   for (size_t i = 0; i < host->peerCount; ++i)
@@ -46,11 +53,12 @@ void on_join(ENetPacket *packet, ENetPeer *peer, ENetHost *host)
 void on_state(ENetPacket *packet)
 {
   uint16_t eid = invalid_entity;
-  float x = 0.f; float y = 0.f;
-  deserialize_entity_state(packet, eid, x, y);
+  float x = 0.f; float y = 0.f; float radius = 0.f;
+  deserialize_entity_state(packet, eid, radius, x, y);
   for (Entity &e : entities)
     if (e.eid == eid)
     {
+      e.radius = radius;
       e.x = x;
       e.y = y;
     }
@@ -104,6 +112,12 @@ int main(int argc, const char **argv)
         {
           case E_CLIENT_TO_SERVER_JOIN:
             on_join(event.packet, event.peer, server);
+
+            for (size_t i = 0; i < server->peerCount; ++i)
+            {
+              ENetPeer *peer = &server->peers[i];
+              send_scores_map(peer, scoresMap);
+            }
             break;
           case E_CLIENT_TO_SERVER_STATE:
             on_state(event.packet);
@@ -133,13 +147,75 @@ int main(int argc, const char **argv)
         }
       }
     }
+
+    for (size_t i = 0; i < entities.size(); ++i)
+    {
+      Entity &a = entities[i];
+
+      for (size_t j = i + 1; j < entities.size(); ++j)
+      {
+        Entity &b = entities[j];
+
+        float dx = a.x - b.x;
+        float dy = a.y - b.y;
+        float distSq = dx * dx + dy * dy;
+
+        float collisionDistance = a.radius + b.radius;
+        float eatDistance = 0.5f * collisionDistance;
+        float eatDistSq = eatDistance * eatDistance;
+
+        if (distSq < eatDistSq)
+        {
+          Entity *bigger, *smaller;
+          if (a.radius > b.radius)
+          {
+            bigger = &a;
+            smaller = &b;
+          }
+          else
+          {
+            bigger = &b;
+            smaller = &a;
+          }
+
+          float bigger_radius = fmin(bigger->radius + smaller->radius * 0.5f, 50.f);
+          float stored_radius = smaller->radius;
+
+          float smaller_x = (rand() % 40 - 20) * 5.f;
+          float smaller_y = (rand() % 40 - 20) * 5.f;
+          float smaller_radius = static_cast<float>(rand()) / RAND_MAX * 3.0f + 11.0f;
+
+          if (controlledMap[smaller->eid])
+          {
+            send_eaten(controlledMap[smaller->eid], smaller_radius, smaller_x, smaller_y);
+          }
+          smaller->x = smaller_x;
+          smaller->y = smaller_y;
+          smaller->radius = smaller_radius;
+
+          if (controlledMap[bigger->eid])
+          {
+            scoresMap[bigger->eid] += (int)stored_radius;
+            send_grown(controlledMap[bigger->eid], bigger_radius);
+
+            for (size_t i = 0; i < server->peerCount; ++i)
+            {
+              ENetPeer *peer = &server->peers[i];
+              send_scores_map(peer, scoresMap);
+            }
+          }
+          bigger->radius = bigger_radius;
+        }
+      }
+    }
+
     for (const Entity &e : entities)
     {
       for (size_t i = 0; i < server->peerCount; ++i)
       {
         ENetPeer *peer = &server->peers[i];
         if (controlledMap[e.eid] != peer)
-          send_snapshot(peer, e.eid, e.x, e.y);
+          send_snapshot(peer, e.eid, e.radius, e.x, e.y);
       }
     }
     //usleep(400000);

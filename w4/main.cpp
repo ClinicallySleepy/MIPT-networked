@@ -6,10 +6,12 @@
 #include <vector>
 #include "entity.h"
 #include "protocol.h"
+#include <cstdio>
 
 
 static std::vector<Entity> entities;
 static uint16_t my_entity = invalid_entity;
+static std::map<uint16_t, int> scoresMap;
 
 void on_new_entity_packet(ENetPacket *packet)
 {
@@ -30,12 +32,13 @@ void on_set_controlled_entity(ENetPacket *packet)
 void on_snapshot(ENetPacket *packet)
 {
   uint16_t eid = invalid_entity;
-  float x = 0.f; float y = 0.f;
-  deserialize_snapshot(packet, eid, x, y);
+  float x = 0.f; float y = 0.f; float radius = 0.f;
+  deserialize_snapshot(packet, eid, radius, x, y);
   // TODO: Direct adressing, of course!
   for (Entity &e : entities)
     if (e.eid == eid)
     {
+      e.radius = radius;
       e.x = x;
       e.y = y;
     }
@@ -93,6 +96,11 @@ int main(int argc, const char **argv)
   {
     float dt = GetFrameTime();
     ENetEvent event;
+
+    bool eaten = false;
+    bool grown = false;
+    float radius; float x; float y;
+
     while (enet_host_service(client, &event, 0) > 0)
     {
       switch (event.type)
@@ -116,12 +124,24 @@ int main(int argc, const char **argv)
         case E_SERVER_TO_CLIENT_SNAPSHOT:
           on_snapshot(event.packet);
           break;
+        case E_SERVER_TO_CLIENT_GROWN:
+          deserialize_grown(event.packet, radius);
+          grown = true;
+          break;
+        case E_SERVER_TO_CLIENT_EATEN:
+          deserialize_eaten(event.packet, radius, x, y);
+          eaten = true;
+          break;
+        case E_SERVER_TO_CLIENT_SCORES_MAP:
+          deserialize_scores_map(event.packet, scoresMap);
+          break;
         };
         break;
       default:
         break;
       };
     }
+
     if (my_entity != invalid_entity)
     {
       bool left = IsKeyDown(KEY_LEFT);
@@ -132,23 +152,38 @@ int main(int argc, const char **argv)
       for (Entity &e : entities)
         if (e.eid == my_entity)
         {
+          if (grown) {
+            e.radius = radius;
+          }
+          if (eaten) {
+            e.radius = radius;
+            e.x = x;
+            e.y = y;
+          }
           // Update
           e.x += ((left ? -dt : 0.f) + (right ? +dt : 0.f)) * 100.f;
           e.y += ((up ? -dt : 0.f) + (down ? +dt : 0.f)) * 100.f;
 
           // Send
-          send_entity_state(serverPeer, my_entity, e.x, e.y);
+          send_entity_state(serverPeer, my_entity, e.radius, e.x, e.y);
         }
     }
 
-
     BeginDrawing();
       ClearBackground(GRAY);
+      {
+        int y = 20;
+        int x = 20;
+        for (const auto& [playerId, score] : scoresMap)
+        {
+          DrawText(TextFormat("ID %d: Score %d", playerId, score), x, y, 20, BLACK);
+          y += 20;
+        }
+      };
       BeginMode2D(camera);
         for (const Entity &e : entities)
         {
-          const Rectangle rect = {e.x, e.y, 10.f, 10.f};
-          DrawRectangleRec(rect, GetColor(e.color));
+          DrawCircleV(Vector2{e.x, e.y}, e.radius, GetColor(e.color));
         }
 
       EndMode2D();
